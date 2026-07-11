@@ -1,0 +1,150 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /api
+
+spring:
+  application:
+    name: smartseckill
+
+  # ==================== SQL Server ====================
+  datasource:
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    url: jdbc:sqlserver://localhost:1433;databaseName=smartseckill;encrypt=true;trustServerCertificate=true
+    username: sa
+    password: 123456
+    hikari:
+      maximum-pool-size: 50
+      minimum-idle: 10
+      idle-timeout: 300000
+      connection-timeout: 5000
+      max-lifetime: 600000
+      pool-name: SeckillHikariPool
+      connection-test-query: SELECT 1
+
+  # ==================== Redis ====================
+  redis:
+    host: localhost
+    port: 6379
+    password:
+    database: 0
+    timeout: 5000ms
+    lettuce:
+      pool:
+        max-active: 64
+        max-idle: 32
+        min-idle: 16
+        max-wait: 3000ms
+
+  # ==================== RabbitMQ ====================
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    listener:
+      simple:
+        auto-startup: true
+        prefetch: 10
+        concurrency: 10
+        max-concurrency: 30
+        retry:
+          enabled: true
+          initial-interval: 1000ms
+          max-attempts: 3
+          multiplier: 2.0
+
+  # ==================== Cache ====================
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=10000,expireAfterWrite=300s
+
+  # ==================== Jackson ====================
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: GMT+8
+    serialization:
+      write-dates-as-timestamps: false
+    deserialization:
+      # SQL Server DATETIME2 格式 "yyyy-MM-ddTHH:mm:ss"（LocalDateTime）
+      # 也兼容 "yyyy-MM-dd HH:mm:ss"、"yyyy-MM-dd'T'HH:mm:ss" 等常见格式
+      adjust-dates-to-context-time-zone: false
+
+  # ==================== Servlet ====================
+  servlet:
+    multipart:
+      max-file-size: 10MB
+      max-request-size: 10MB
+
+  # ==================== 排除未安装的中间件，避免启动报错 ====================
+  autoconfigure:
+    exclude:
+      - org.redisson.spring.starter.RedissonAutoConfiguration
+      - org.redisson.spring.starter.RedissonAutoConfigurationV2
+
+# ==================== MyBatis-Plus ====================
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  type-aliases-package: com.smartseckill.**.entity
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-field: deleted
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+
+# ==================== JWT ====================
+jwt:
+  secret: SmartSeckill2024SecretKeyForJwtTokenGenerationMustBeLongEnough
+  expiration: 7200000
+  refresh-expiration: 604800000
+
+# ==================== MinIO ====================
+minio:
+  endpoint: http://localhost:9000
+  access-key: minioadmin
+  secret-key: minioadmin
+  bucket: smartseckill
+
+# ==================== Swagger ====================
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+
+# ==================== Actuator ====================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+    tags:
+      application: ${spring.application.name}
+
+# ==================== Redisson ====================
+redisson:
+  single-server-config:
+    address: redis://localhost:6379
+    connection-minimum-pool-size: 2
+    connection-pool-size: 16
+    connect-timeout: 3000
+    timeout: 3000
+    retry-attempts: 0
+
+# ==================== Logging ====================
+logging:
+  level:
+    com.smartseckill: debug
+    org.springframework.security: info
