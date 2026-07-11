@@ -31,6 +31,8 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+# 敏感配置：真实密码仅保留本地，GitHub 只推脱敏模板 application.yml
+src/main/resources/application-dev.yml
 
 # ==================== Claude ====================
 .claude/

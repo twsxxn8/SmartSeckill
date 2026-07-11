@@ -7,12 +7,16 @@ spring:
   application:
     name: smartseckill
 
+  # 激活 dev profile，真实配置在 application-dev.yml（已 gitignore，不上传 GitHub）
+  profiles:
+    active: dev
+
   # ==================== SQL Server ====================
   datasource:
     driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
     url: jdbc:sqlserver://localhost:1433;databaseName=smartseckill;encrypt=true;trustServerCertificate=true
-    username: sa
-    password: 123456
+    username: your_sa_username
+    password: your_password
     hikari:
       maximum-pool-size: 50
       minimum-idle: 10
@@ -26,7 +30,7 @@ spring:
   redis:
     host: localhost
     port: 6379
-    password:
+    password: your_redis_password_or_empty
     database: 0
     timeout: 5000ms
     lettuce:
@@ -40,8 +44,8 @@ spring:
   rabbitmq:
     host: localhost
     port: 5672
-    username: guest
-    password: guest
+    username: your_rabbitmq_username
+    password: your_rabbitmq_password
     virtual-host: /
     listener:
       simple:
@@ -100,15 +104,15 @@ mybatis-plus:
 
 # ==================== JWT ====================
 jwt:
-  secret: SmartSeckill2024SecretKeyForJwtTokenGenerationMustBeLongEnough
+  secret: change_me_to_a_random_secret_at_least_32_chars
   expiration: 7200000
   refresh-expiration: 604800000
 
 # ==================== MinIO ====================
 minio:
   endpoint: http://localhost:9000
-  access-key: minioadmin
-  secret-key: minioadmin
+  access-key: your_minio_access_key
+  secret-key: your_minio_secret_key
   bucket: smartseckill
 
 # ==================== Swagger ====================
