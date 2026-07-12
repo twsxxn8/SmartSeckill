@@ -99,10 +99,6 @@ public class ReviewService {
             review.setContent(request.getContent());
             reviewMapper.insert(review);
 
-            // 设置 root_id = id（根评论的root_id等于自身id）
-            review.setRootId(review.getId());
-            reviewMapper.updateById(review);
-
             log.info("用户 {} 对 SPU {} SKU {} 发表顶层评论 {}星 ID={}", userId, request.getSpuId(), request.getSkuId(), request.getRating(), review.getId());
 
         } else {
@@ -113,8 +109,8 @@ public class ReviewService {
                 throw new BusinessException(ResultCode.NOT_FOUND);
             }
 
-            // 确定 root_id
-            Long rootId = parent.getRootId() > 0 ? parent.getRootId() : parent.getId();
+            // 确定 root_id：父评论是顶层评论时用父评论ID，否则沿用父评论的root_id
+            Long rootId = parent.getRootId() == 0 ? parent.getId() : parent.getRootId();
 
             // 插入回复
             ProductReview reply = new ProductReview();

@@ -382,3 +382,27 @@ CREATE INDEX idx_user_behavior_sku_id ON user_behavior(sku_id);
 CREATE INDEX idx_user_credit_user_id ON user_credit(user_id);
 CREATE INDEX idx_order_status_log_order_id ON order_status_log(order_id);
 GO
+
+-- ==================== 商品评论表（支持楼中楼回复） ====================
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='product_review' AND xtype='U')
+CREATE TABLE product_review (
+    id              BIGINT IDENTITY(1,1) PRIMARY KEY,
+    spu_id          BIGINT NOT NULL,
+    sku_id          BIGINT NOT NULL,
+    user_id         BIGINT NOT NULL,
+    order_sn        NVARCHAR(50) NULL,
+    parent_id       BIGINT DEFAULT 0,
+    root_id         BIGINT DEFAULT 0,
+    rating          TINYINT NULL CHECK (rating IS NULL OR rating BETWEEN 1 AND 5),
+    content         NVARCHAR(1000),
+    create_time     DATETIME2 DEFAULT GETDATE(),
+    update_time     DATETIME2 DEFAULT GETDATE(),
+    deleted         TINYINT DEFAULT 0
+);
+GO
+
+CREATE INDEX idx_review_spu ON product_review(spu_id, deleted, root_id);
+CREATE INDEX idx_review_root ON product_review(root_id, create_time);
+CREATE UNIQUE INDEX idx_review_user_order_sku ON product_review(user_id, order_sn, sku_id)
+    WHERE order_sn IS NOT NULL AND deleted = 0;
+GO

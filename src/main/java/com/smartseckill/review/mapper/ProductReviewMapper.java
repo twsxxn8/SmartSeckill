@@ -45,7 +45,7 @@ public interface ProductReviewMapper extends BaseMapper<ProductReview> {
             "u.nickname, u.avatar " +
             "FROM product_review r " +
             "LEFT JOIN sys_user u ON r.user_id = u.id " +
-            "WHERE r.root_id = #{rootId} AND r.root_id != 0 AND r.deleted = 0 " +
+            "WHERE r.root_id = #{rootId} AND r.id != #{rootId} AND r.deleted = 0 " +
             "ORDER BY r.create_time ASC")
     List<ReviewListResponse.ReplyItem> selectRepliesByRootId(@Param("rootId") Long rootId);
 
