@@ -76,7 +76,8 @@ public class SecurityConfig {
                     "/product/search",
                     "/seckill/list",
                     "/seckill/detail/**",
-                    "/coupon/available"
+                    "/coupon/available",
+                    "/review/spu/**"
                 ).permitAll()
                 .antMatchers("/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()

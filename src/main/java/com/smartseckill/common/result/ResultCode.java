@@ -61,7 +61,12 @@ public enum ResultCode {
     COUPON_MIN_AMOUNT_NOT_MET(1605, "未满足优惠券使用门槛"),
     COUPON_ALREADY_USED(1606, "优惠券已使用"),
     COUPON_NOT_AVAILABLE(1607, "优惠券不可用"),
-    COUPON_NOT_STARTED(1608, "优惠券抢购未开始");
+    COUPON_NOT_STARTED(1608, "优惠券抢购未开始"),
+
+    // 评论相关 1701-1799
+    REVIEW_ALREADY_EXISTS(1701, "您已对该商品发表过评论"),
+    REVIEW_NOT_PURCHASED(1702, "只有购买过该商品的用户才能评论"),
+    REVIEW_ORDER_NOT_COMPLETED(1703, "订单未完成，无法评论");
 
     /** 业务状态码 */
     private final int code;
