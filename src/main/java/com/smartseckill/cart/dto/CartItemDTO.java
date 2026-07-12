@@ -23,8 +23,8 @@ public class CartItemDTO {
     @Schema(description = "商品图片")
     private String skuImage;
 
-    @Schema(description = "规格信息")
-    private String specInfo;
+    @Schema(description = "规格信息（JSON 对象或字符串）")
+    private Object specInfo;
 
     @Schema(description = "单价")
     private java.math.BigDecimal price;

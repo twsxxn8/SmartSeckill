@@ -120,6 +120,11 @@ public class CouponController {
                 new LambdaQueryWrapper<Coupon>()
                         .in(Coupon::getId, new ArrayList<>(statusMap.keySet()))
                         .eq(Coupon::getDeleted, 0)
+                        // 过滤不可用、已过期、已抢光的券，与下单校验保持一致
+                        .eq(Coupon::getStatus, 1)
+                        .le(Coupon::getStartTime, LocalDateTime.now())
+                        .ge(Coupon::getEndTime, LocalDateTime.now())
+                        .apply("total_count > used_count OR total_count IS NULL")
         );
 
         List<UserCouponDTO> result = new ArrayList<>();
