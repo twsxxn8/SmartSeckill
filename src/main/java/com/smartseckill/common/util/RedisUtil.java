@@ -62,6 +62,18 @@ public class RedisUtil {
     // ==================== 风控 Key ====================
     /** 用户行为特征 Key 前缀，供 AI 风控模型使用 */
     public static final String RISK_FEATURE_PREFIX = "risk:feature:";
+    /** 人机验证通过标记 Key 前缀，完整 Key = risk:verified:{userId}:{activityId}，值 = "1" */
+    public static final String RISK_VERIFIED_PREFIX = "risk:verified:";
+    /** 人机验证通过标记过期时间（分钟） */
+    public static final long RISK_VERIFIED_TTL_MINUTES = 10;
+    /** 人机验证算术题答案 Key 前缀，完整 Key = risk:verify:challenge:{token} */
+    public static final String RISK_VERIFY_CHALLENGE_PREFIX = "risk:verify:challenge:";
+    /** 风控黑名单 Key 前缀，完整 Key = risk:blacklist:{userId}，值 = "1" */
+    public static final String RISK_BLACKLIST_PREFIX = "risk:blacklist:";
+    /** 风控 BLOCK 计数 Key 前缀，完整 Key = risk:block:count:{userId} */
+    public static final String RISK_BLOCK_COUNT_PREFIX = "risk:block:count:";
+    /** 黑名单与 BLOCK 计数过期时间（小时） */
+    public static final long RISK_BLACKLIST_TTL_HOURS = 24;
 
     // ==================== 基础操作 ====================
 

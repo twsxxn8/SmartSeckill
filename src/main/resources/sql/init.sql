@@ -311,6 +311,22 @@ CREATE TABLE user_credit (
 );
 GO
 
+-- 风控决策日志表（DELAY/VERIFY/BLOCK 决策经 MQ 异步落库，供审计与规则调优）
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='risk_decision_log' AND xtype='U')
+CREATE TABLE risk_decision_log (
+    id BIGINT IDENTITY(1,1) PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    activity_id BIGINT NOT NULL,
+    client_ip NVARCHAR(50),
+    user_agent NVARCHAR(500),
+    risk_score INT NOT NULL,             -- 风险评分（0-100）
+    risk_level NVARCHAR(20),             -- LOW/MEDIUM/HIGH/CRITICAL
+    action VARCHAR(20),                  -- DELAY/VERIFY/BLOCK
+    reason NVARCHAR(500),                -- 决策原因
+    created_at DATETIME2 DEFAULT GETDATE()
+);
+GO
+
 -- =============================================
 -- 7. 优惠券表
 -- =============================================
@@ -381,4 +397,5 @@ CREATE INDEX idx_user_behavior_user_id ON user_behavior(user_id);
 CREATE INDEX idx_user_behavior_sku_id ON user_behavior(sku_id);
 CREATE INDEX idx_user_credit_user_id ON user_credit(user_id);
 CREATE INDEX idx_order_status_log_order_id ON order_status_log(order_id);
+CREATE INDEX idx_risk_decision_log_user_time ON risk_decision_log(user_id, created_at DESC);
 GO

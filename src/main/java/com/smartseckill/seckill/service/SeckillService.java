@@ -176,7 +176,12 @@ public class SeckillService {
             throw new BusinessException(ResultCode.RISK_CONTROL_BLOCKED);
         }
         if (riskDecision.getAction() == RiskAction.VERIFY) {
-            throw new BusinessException(ResultCode.RISK_CONTROL_VERIFY);
+            // 已通过人机验证的用户直接放行（视同 PASS），否则要求完成安全验证
+            if (riskControlService.isVerified(userId, activityId)) {
+                log.info("已验证放行: userId={}, activityId={}", userId, activityId);
+            } else {
+                throw new BusinessException(ResultCode.RISK_CONTROL_VERIFY);
+            }
         }
         if (riskDecision.getAction() == RiskAction.DELAY) {
             // 添加随机延迟（100-500ms）以缓解异常请求

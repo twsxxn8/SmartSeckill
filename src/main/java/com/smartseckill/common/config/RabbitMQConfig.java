@@ -52,6 +52,14 @@ public class RabbitMQConfig {
     /** 风控日志路由键 */
     public static final String RISK_LOG_ROUTING_KEY = "risk.log.write";
 
+    // ==================== 风控决策日志队列 ====================
+    /** 风控决策日志交换机 */
+    public static final String RISK_DECISION_EXCHANGE = "risk.decision.exchange";
+    /** 风控决策日志队列 */
+    public static final String RISK_DECISION_QUEUE = "risk.decision.queue";
+    /** 风控决策日志路由键 */
+    public static final String RISK_DECISION_ROUTING_KEY = "risk.decision";
+
     // ==================== 秒杀订单 ====================
 
     /** 秒杀订单 Direct 交换机 */
@@ -150,6 +158,30 @@ public class RabbitMQConfig {
         return BindingBuilder.bind(riskLogQueue())
                 .to(riskLogExchange())
                 .with(RISK_LOG_ROUTING_KEY);
+    }
+
+    // ==================== 风控决策日志（DELAY/VERIFY/BLOCK 异步落库） ====================
+
+    /** 风控决策 Direct 交换机 */
+    @Bean
+    public DirectExchange riskDecisionExchange() {
+        return ExchangeBuilder.directExchange(RISK_DECISION_EXCHANGE)
+                .durable(true)
+                .build();
+    }
+
+    /** 风控决策持久化队列，{@link com.smartseckill.risk.consumer.RiskDecisionConsumer} 监听此队列 */
+    @Bean
+    public Queue riskDecisionQueue() {
+        return QueueBuilder.durable(RISK_DECISION_QUEUE).build();
+    }
+
+    /** 绑定风控决策队列到交换机 */
+    @Bean
+    public Binding riskDecisionBinding() {
+        return BindingBuilder.bind(riskDecisionQueue())
+                .to(riskDecisionExchange())
+                .with(RISK_DECISION_ROUTING_KEY);
     }
 
     /**
