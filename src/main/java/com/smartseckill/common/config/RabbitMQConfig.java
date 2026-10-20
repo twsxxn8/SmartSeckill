@@ -2,6 +2,7 @@ package com.smartseckill.common.config;
 
 import org.springframework.amqp.core.*;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.context.annotation.Bean;
@@ -50,6 +51,14 @@ public class RabbitMQConfig {
     public static final String RISK_LOG_QUEUE = "risk.log.queue";
     /** 风控日志路由键 */
     public static final String RISK_LOG_ROUTING_KEY = "risk.log.write";
+
+    // ==================== 风控决策日志队列 ====================
+    /** 风控决策日志交换机 */
+    public static final String RISK_DECISION_EXCHANGE = "risk.decision.exchange";
+    /** 风控决策日志队列 */
+    public static final String RISK_DECISION_QUEUE = "risk.decision.queue";
+    /** 风控决策日志路由键 */
+    public static final String RISK_DECISION_ROUTING_KEY = "risk.decision";
 
     // ==================== 秒杀订单 ====================
 
@@ -151,6 +160,30 @@ public class RabbitMQConfig {
                 .with(RISK_LOG_ROUTING_KEY);
     }
 
+    // ==================== 风控决策日志（DELAY/VERIFY/BLOCK 异步落库） ====================
+
+    /** 风控决策 Direct 交换机 */
+    @Bean
+    public DirectExchange riskDecisionExchange() {
+        return ExchangeBuilder.directExchange(RISK_DECISION_EXCHANGE)
+                .durable(true)
+                .build();
+    }
+
+    /** 风控决策持久化队列，{@link com.smartseckill.risk.consumer.RiskDecisionConsumer} 监听此队列 */
+    @Bean
+    public Queue riskDecisionQueue() {
+        return QueueBuilder.durable(RISK_DECISION_QUEUE).build();
+    }
+
+    /** 绑定风控决策队列到交换机 */
+    @Bean
+    public Binding riskDecisionBinding() {
+        return BindingBuilder.bind(riskDecisionQueue())
+                .to(riskDecisionExchange())
+                .with(RISK_DECISION_ROUTING_KEY);
+    }
+
     /**
      * JSON 消息转换器，替代默认的 Java 序列化。
      * 消息体为 JSON 字符串，跨语言兼容，且体积更小。
@@ -170,5 +203,15 @@ public class RabbitMQConfig {
         RabbitTemplate template = new RabbitTemplate(connectionFactory);
         template.setMessageConverter(converter);
         return template;
+    }
+
+    /**
+     * RabbitAdmin：负责队列/交换机的自动声明，并提供队列深度查询能力
+     * （{@code StockReconciliationJob} 库存恢复与 {@code CacheWarmUpRunner} 启动预热依赖）。
+     * MQ 不可用时声明动作随连接重试，不影响上下文启动。
+     */
+    @Bean
+    public RabbitAdmin rabbitAdmin(ConnectionFactory connectionFactory) {
+        return new RabbitAdmin(connectionFactory);
     }
 }

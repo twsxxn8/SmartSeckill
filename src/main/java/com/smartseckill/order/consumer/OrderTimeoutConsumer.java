@@ -39,6 +39,7 @@ public class OrderTimeoutConsumer {
     private final OrderItemMapper orderItemMapper;
     private final ProductStockMapper stockMapper;
     private final OrderStatusLogMapper statusLogMapper;
+    private final com.smartseckill.seckill.service.SeckillStockRestoreService seckillStockRestoreService;
 
     /**
      * 监听死信队列，处理超时未支付的订单。
@@ -81,6 +82,12 @@ public class OrderTimeoutConsumer {
         order.setCancelTime(LocalDateTime.now());
         order.setCancelReason("超时未支付，系统自动取消");
         orderInfoMapper.updateById(order);
+
+        // 秒杀订单（orderType=1）无 OrderItem，上面的 unlockStock 对其无效，
+        // 需走秒杀专用回补：Redis 库存 + 已完成标记 + DB stock + 活动剩余库存
+        if (order.getOrderType() != null && order.getOrderType() == 1) {
+            seckillStockRestoreService.restoreOnCancel(orderSn);
+        }
 
         OrderStatusLog statusLog = new OrderStatusLog();
         statusLog.setOrderId(order.getId());

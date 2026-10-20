@@ -1,5 +1,6 @@
 package com.smartseckill.common.util;
 
+import com.smartseckill.risk.service.RiskControlService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -28,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 public class SeckillTokenUtil {
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final RiskControlService riskControlService;
 
     public static final String SECKILL_TOKEN_PREFIX = "seckill:token:";
     private static final long TOKEN_TTL_MINUTES = 5;
@@ -60,6 +62,14 @@ public class SeckillTokenUtil {
         String token = UUID.randomUUID().toString().replace("-", "");
         String key = SECKILL_TOKEN_PREFIX + userId + ":" + activityId;
         stringRedisTemplate.opsForValue().set(key, token, TOKEN_TTL_MINUTES, TimeUnit.MINUTES);
+        // 通知风控记录 Token 生成时间（用户链路 / 机器人链路共用此入口，
+        // 供 Token→执行间隔特征使用）；失败仅记日志，不影响 Token 发放
+        try {
+            riskControlService.recordTokenGenerated(userId, activityId);
+        } catch (Exception e) {
+            log.warn("Failed to record token time for risk control: userId={}, activityId={}, error={}",
+                    userId, activityId, e.getMessage());
+        }
         log.debug("Seckill token generated: userId={}, activityId={}", userId, activityId);
         return token;
     }

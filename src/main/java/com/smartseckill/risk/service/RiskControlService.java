@@ -1,15 +1,23 @@
 package com.smartseckill.risk.service;
 
+import com.smartseckill.common.config.RabbitMQConfig;
 import com.smartseckill.common.util.RedisUtil;
+import com.smartseckill.risk.model.RiskDecisionEvent;
 import com.smartseckill.risk.model.RiskFeature;
 import com.smartseckill.risk.model.RiskDecision;
 import com.smartseckill.risk.model.RiskDecision.RiskLevel;
 import com.smartseckill.risk.model.RiskDecision.RiskAction;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -47,6 +55,7 @@ import java.util.concurrent.TimeUnit;
 public class RiskControlService {
 
     private final StringRedisTemplate stringRedisTemplate;
+    private final RabbitTemplate rabbitTemplate;
 
     /** 风控特征窗口（秒） */
     private static final int FEATURE_WINDOW_SECONDS = 60;
@@ -71,6 +80,8 @@ public class RiskControlService {
     private static final int ACTIVITY_HOP_THRESHOLD = 3;   // 快速切换活动数
     private static final long NEW_ACCOUNT_DAYS = 7;       // 新账号天数
     private static final double HIGH_SUCCESS_THRESHOLD = 0.8; // 异常高的成功率
+    /** BLOCK 决策累计达到此次数后自动加入黑名单 */
+    private static final long BLOCK_BLACKLIST_THRESHOLD = 3;
 
     /**
      * 评估用户风险。
@@ -82,6 +93,21 @@ public class RiskControlService {
      * @return 风控决策
      */
     public RiskDecision evaluateRisk(Long userId, Long activityId, String clientIp, String userAgent) {
+        // 0. 黑名单前置检查：命中直接 BLOCK（满分），不再提取特征
+        if (isBlacklisted(userId)) {
+            RiskDecision decision = RiskDecision.builder()
+                    .riskScore(100)
+                    .riskLevel(RiskLevel.CRITICAL)
+                    .action(RiskAction.BLOCK)
+                    .reason("黑名单用户")
+                    .build();
+            // 黑名单命中的 BLOCK 照常发 MQ 审计事件；
+            // 但不累加 BLOCK 计数——用户已在黑名单中，重复计数无意义
+            sendDecisionEvent(decision, userId, activityId, clientIp, userAgent);
+            log.warn("Blacklisted user blocked: userId={}, activityId={}", userId, activityId);
+            return decision;
+        }
+
         // 1. 提取行为特征
         RiskFeature feature = extractFeatures(userId, activityId, clientIp, userAgent);
 
@@ -94,10 +120,105 @@ public class RiskControlService {
         // 4. 更新特征记录到 Redis（供下次评估使用）
         updateFeatureSnapshot(userId, activityId, clientIp, userAgent, score);
 
+        // 5. 非放行决策发送 MQ 异步落库（DELAY/VERIFY/BLOCK）
+        sendDecisionEvent(decision, userId, activityId, clientIp, userAgent);
+
+        // 6. BLOCK 决策累积惩罚：计数 +1，达到阈值自动拉黑（24h）
+        if (decision.getAction() == RiskAction.BLOCK) {
+            recordBlockAndMaybeBlacklist(userId);
+        }
+
         log.debug("Risk evaluation: userId={}, score={}, action={}, reason={}",
                 userId, score, decision.getAction(), decision.getReason());
 
         return decision;
+    }
+
+    /**
+     * 记录一次 BLOCK 决策：INCR 计数键（首次设置 24h TTL），
+     * 24h 内累计达到 {@link #BLOCK_BLACKLIST_THRESHOLD} 次则自动加入黑名单。
+     * 失败仅记录日志，不影响秒杀主流程。
+     */
+    private void recordBlockAndMaybeBlacklist(Long userId) {
+        try {
+            String countKey = RedisUtil.RISK_BLOCK_COUNT_PREFIX + userId;
+            Long count = stringRedisTemplate.opsForValue().increment(countKey);
+            if (count == null) {
+                return;
+            }
+            if (count == 1L) {
+                stringRedisTemplate.expire(countKey,
+                        RedisUtil.RISK_BLACKLIST_TTL_HOURS, TimeUnit.HOURS);
+            }
+            if (count >= BLOCK_BLACKLIST_THRESHOLD) {
+                addToBlacklist(userId);
+                log.warn("User auto-blacklisted after {} BLOCK decisions in 24h: userId={}",
+                        count, userId);
+            }
+        } catch (Exception e) {
+            log.error("Failed to record block count: userId={}", userId, e);
+        }
+    }
+
+    // ==================== 黑名单管理 ====================
+
+    /** 手动拉黑：写入黑名单键（TTL 24h） */
+    public void addToBlacklist(Long userId) {
+        stringRedisTemplate.opsForValue().set(
+                RedisUtil.RISK_BLACKLIST_PREFIX + userId, "1",
+                RedisUtil.RISK_BLACKLIST_TTL_HOURS, TimeUnit.HOURS);
+    }
+
+    /** 解除拉黑：删除黑名单键与 BLOCK 计数键 */
+    public void removeFromBlacklist(Long userId) {
+        stringRedisTemplate.delete(RedisUtil.RISK_BLACKLIST_PREFIX + userId);
+        stringRedisTemplate.delete(RedisUtil.RISK_BLOCK_COUNT_PREFIX + userId);
+    }
+
+    /** 判断用户是否在黑名单中 */
+    public boolean isBlacklisted(Long userId) {
+        return Boolean.TRUE.equals(
+                stringRedisTemplate.hasKey(RedisUtil.RISK_BLACKLIST_PREFIX + userId));
+    }
+
+    // ==================== 人机验证 ====================
+
+    /** 判断用户是否已通过人机验证（risk:verified:{userId}:{activityId} 标记存在） */
+    public boolean isVerified(Long userId, Long activityId) {
+        return Boolean.TRUE.equals(stringRedisTemplate.hasKey(
+                RedisUtil.RISK_VERIFIED_PREFIX + userId + ":" + activityId));
+    }
+
+    /**
+     * 发送风控决策事件到 MQ，由消费者异步写入 risk_decision_log 表。
+     * <p>
+     * 仅 DELAY/VERIFY/BLOCK 需要落库审计；发送失败仅记录日志，
+     * 绝不影响秒杀主流程。
+     * </p>
+     */
+    private void sendDecisionEvent(RiskDecision decision, Long userId, Long activityId,
+                                   String clientIp, String userAgent) {
+        if (decision.getAction() == RiskAction.PASS) {
+            return;
+        }
+        try {
+            RiskDecisionEvent event = RiskDecisionEvent.builder()
+                    .userId(userId)
+                    .activityId(activityId)
+                    .clientIp(clientIp)
+                    .userAgent(userAgent)
+                    .riskScore(decision.getRiskScore())
+                    .riskLevel(decision.getRiskLevel().name())
+                    .action(decision.getAction().name())
+                    .reason(decision.getReason())
+                    .timestamp(System.currentTimeMillis())
+                    .build();
+            rabbitTemplate.convertAndSend(RabbitMQConfig.RISK_DECISION_EXCHANGE,
+                    RabbitMQConfig.RISK_DECISION_ROUTING_KEY, event);
+        } catch (Exception e) {
+            log.error("Failed to send risk decision event: userId={}, activityId={}, action={}",
+                    userId, activityId, decision.getAction(), e);
+        }
     }
 
     /**
@@ -116,6 +237,14 @@ public class RiskControlService {
         stringRedisTemplate.opsForZSet().removeRangeByScore(userFeatureKey, 0, windowStart);
         Long count = stringRedisTemplate.opsForZSet().count(userFeatureKey, windowStart, now);
         builder.requestCount(count != null ? count.intValue() : 0);
+
+        // 间隔特征：读取窗口内全部请求时间戳（member 即时间戳字符串），
+        // 计算相邻请求间隔的最小值与平均值，识别脚本级高频请求
+        Set<String> windowMembers = stringRedisTemplate.opsForZSet()
+                .rangeByScore(userFeatureKey, windowStart, now);
+        double[] intervalStats = calcIntervalStats(windowMembers);
+        builder.minIntervalMs(intervalStats[0]);
+        builder.avgIntervalMs(intervalStats[1]);
 
         // 速度特征：从 Redis Hash 读取上次 Token 时间
         String lastTokenTimeKey = userFeatureKey + ":token_time";
@@ -175,6 +304,42 @@ public class RiskControlService {
         }
 
         return builder.build();
+    }
+
+    /**
+     * 计算窗口内相邻请求间隔统计。
+     * <p>
+     * 将滑动窗口 member（请求时间戳字符串）解析为 long 并升序排序，
+     * 对相邻差值取最小值和平均值。
+     * </p>
+     *
+     * @param members 窗口内的 ZSet member 集合（时间戳字符串）
+     * @return [最小间隔ms, 平均间隔ms]；不足 2 条有效记录时均为 -1
+     */
+    static double[] calcIntervalStats(Collection<String> members) {
+        if (members == null || members.size() < 2) {
+            return new double[]{-1, -1};
+        }
+        List<Long> timestamps = new ArrayList<>(members.size());
+        for (String member : members) {
+            try {
+                timestamps.add(Long.parseLong(member));
+            } catch (NumberFormatException ignored) {
+                // 忽略窗口内的脏数据
+            }
+        }
+        if (timestamps.size() < 2) {
+            return new double[]{-1, -1};
+        }
+        Collections.sort(timestamps);
+        long min = Long.MAX_VALUE;
+        long sum = 0;
+        for (int i = 1; i < timestamps.size(); i++) {
+            long diff = timestamps.get(i) - timestamps.get(i - 1);
+            min = Math.min(min, diff);
+            sum += diff;
+        }
+        return new double[]{min, sum / (double) (timestamps.size() - 1)};
     }
 
     /**

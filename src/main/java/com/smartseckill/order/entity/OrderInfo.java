@@ -18,6 +18,8 @@ public class OrderInfo extends BaseEntity {
 
     /** 订单编号（业务唯一标识，非数据库主键） */
     private String orderSn;
+    /** 一次性下单令牌（幂等防重，order_info.submit_token 过滤唯一索引兜底，秒杀订单为 NULL） */
+    private String submitToken;
     private Long userId;
     /** 商品总金额（未扣优惠券） */
     private BigDecimal totalAmount;

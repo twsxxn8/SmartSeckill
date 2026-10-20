@@ -5,6 +5,12 @@ import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.smartseckill.common.exception.BusinessException;
 import com.smartseckill.common.page.PageResponse;
 import com.smartseckill.common.result.ResultCode;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.smartseckill.common.exception.BusinessException;
+import com.smartseckill.common.page.PageResponse;
+import com.smartseckill.common.result.ResultCode;
+import com.smartseckill.product.dto.ProductDetailDTO;
 import com.smartseckill.product.entity.*;
 import com.smartseckill.product.mapper.*;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +41,7 @@ public class ProductService {
     private final ProductStockMapper stockMapper;
     private final ProductCategoryMapper categoryMapper;
     private final ProductBrandMapper brandMapper;
+    private final ObjectMapper objectMapper;
 
     // ==================== 分类管理 ====================
 
@@ -160,6 +167,84 @@ public class ProductService {
             throw new BusinessException(ResultCode.PRODUCT_NOT_FOUND);
         }
         return spu;
+    }
+
+    /**
+     * 获取商品完整详情（含品牌/分类名称 + 解析后的 SKU 规格）。
+     * <p>
+     * 与 {@link #getSpuDetail} 不同：
+     * <ul>
+     *   <li>brandName / categoryName 替代了 brandId / categoryId</li>
+     *   <li>SKU 的 specInfo 从 JSON 字符串解析为 Map，前端无需二次解析</li>
+     * </ul>
+     * </p>
+     */
+    public ProductDetailDTO getProductDetailFull(Long spuId) {
+        // 1. 获取 SPU
+        ProductSpu spu = getSpuDetail(spuId);
+
+        // 2. 获取品牌名称
+        String brandName = null;
+        if (spu.getBrandId() != null) {
+            ProductBrand brand = brandMapper.selectById(spu.getBrandId());
+            if (brand != null && brand.getDeleted() == 0) {
+                brandName = brand.getBrandName();
+            }
+        }
+
+        // 3. 获取分类名称
+        String categoryName = null;
+        if (spu.getCategoryId() != null) {
+            ProductCategory cat = categoryMapper.selectById(spu.getCategoryId());
+            if (cat != null && cat.getDeleted() == 0) {
+                categoryName = cat.getCategoryName();
+            }
+        }
+
+        // 4. 获取 SKU 列表
+        List<ProductSku> skus = getSkuListBySpuId(spuId);
+
+        // 5. 组装 DTO
+        ProductDetailDTO dto = new ProductDetailDTO();
+        dto.setId(spu.getId());
+        dto.setSpuName(spu.getSpuName());
+        dto.setDescription(spu.getDescription());
+        dto.setMainImage(spu.getMainImage());
+        dto.setImages(spu.getImages());
+        dto.setStatus(spu.getStatus());
+        dto.setBrandName(brandName);
+        dto.setCategoryName(categoryName);
+
+        List<ProductDetailDTO.SkuDetail> skuDetails = new ArrayList<>();
+        for (ProductSku sku : skus) {
+            ProductDetailDTO.SkuDetail sd = new ProductDetailDTO.SkuDetail();
+            sd.setId(sku.getId());
+            sd.setSkuName(sku.getSkuName());
+            sd.setSkuCode(sku.getSkuCode());
+            sd.setPrice(sku.getPrice());
+            sd.setMarketPrice(sku.getMarketPrice());
+            sd.setImage(sku.getImage());
+            sd.setStatus(sku.getStatus());
+
+            // 解析 specInfo JSON → Map
+            if (sku.getSpecInfo() != null && !sku.getSpecInfo().isEmpty()) {
+                try {
+                    Map<String, String> specMap = objectMapper.readValue(
+                            sku.getSpecInfo(), new TypeReference<Map<String, String>>() {});
+                    sd.setSpecInfo(specMap);
+                } catch (Exception e) {
+                    log.warn("解析 SKU {} 的 specInfo 失败: {}", sku.getId(), e.getMessage());
+                    sd.setSpecInfo(Collections.emptyMap());
+                }
+            } else {
+                sd.setSpecInfo(Collections.emptyMap());
+            }
+
+            skuDetails.add(sd);
+        }
+        dto.setSkus(skuDetails);
+
+        return dto;
     }
 
     /** 获取某 SPU 下所有 SKU（规格） */

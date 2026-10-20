@@ -9,6 +9,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -37,6 +38,7 @@ import static org.junit.jupiter.api.Assertions.*;
  * </ol>
  */
 @DisplayName("Redis+Lua Lock High-Concurrency Stress Tests")
+@Tag("integration")  // 需要本地 Redis localhost:6379，默认 mvn test 排除；运行：mvn test -DexcludedGroups= -Dgroups=integration
 class RedisLuaLockConcurrencyTest {
 
     // ==================== Lua 脚本（与 SeckillLockUtil 完全一致） ====================

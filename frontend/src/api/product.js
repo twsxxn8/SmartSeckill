@@ -9,6 +9,10 @@ export function getProductDetail(spuId) {
   return request.get(`/product/detail/${spuId}`)
 }
 
+export function getProductDetailFull(spuId) {
+  return request.get(`/product/detail/${spuId}/full`)
+}
+
 export function getSkuList(spuId) {
   return request.get(`/product/${spuId}/skus`)
 }

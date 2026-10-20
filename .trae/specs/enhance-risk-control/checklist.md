@@ -1,0 +1,10 @@
+- [x] `extractFeatures()` 真实填充 `minIntervalMs`/`avgIntervalMs`，50ms 间隔请求触发 +40 评分
+- [x] Token 生成路径（用户 + 机器人）均调用 `recordTokenGenerated`，40ms 内执行触发 +25 评分
+- [x] BLOCK/VERIFY/DELAY 决策经 RabbitMQ 异步写入 `risk_decision_log` 表，字段完整（userId/activityId/IP/评分/等级/动作/原因/时间）
+- [x] 决策事件 MQ 发送异常时秒杀主链路不受影响，仅记录 error 日志
+- [x] `POST /risk/verify` 验证通过后写入 `risk:verified:{userId}:{activityId}`（TTL 10 分钟）
+- [x] VERIFY 决策时命中已验证标记则放行，未命中抛 `RISK_CONTROL_VERIFY`
+- [x] 同一用户 24h 内 3 次 BLOCK 后自动进入黑名单，后续请求直接 BLOCK（score=100）且不再提取特征
+- [x] 管理端可分页查询决策日志、查询/拉黑/解除黑名单（仅 ADMIN 角色）
+- [x] `mvn test` 全部通过
+- [x] BotService FAST 机器人实测：触发拦截、决策落库、黑名单生效、验证后放行全流程正常

@@ -60,6 +60,7 @@ public class SeckillOrderConsumer {
     private final SeckillEventPublisher eventPublisher;
     private final SysUserMapper sysUserMapper;
     private final SeckillLockUtil seckillLockUtil;
+    private final org.springframework.amqp.rabbit.core.RabbitTemplate rabbitTemplate;
 
     /**
      * 消费秒杀订单创建消息。
@@ -116,10 +117,14 @@ public class SeckillOrderConsumer {
             seckillOrderMapper.insert(seckillOrder);
 
             // 3. 扣减数据库真实库存（Redis 已预减，这里做最终扣减）
-            int deductResult = stockMapper.deductStock(skuId, message.getQuantity());
+            //    必须用秒杀专用扣减：只减 stock 不动 lock_stock（普通链路的 deductStock
+            //    会把 lock_stock 扣成负数 → 普通通道可用库存虚增超卖）
+            int deductResult = stockMapper.deductSeckillStock(skuId, message.getQuantity());
             if (deductResult == 0) {
-                log.error("Stock deduct failed for seckill order: orderSn={}, skuId={}", orderSn, skuId);
-                // 库存扣减失败但已预减过 Redis，记录异常由人工/定时任务处理
+                // DB 库存不足：抛异常回滚订单，MQ 重试后仍失败则进入死信
+                // Redis 预扣由 StockReconciliationJob 对账回补，用户侧锁 TTL 到期后可重试
+                log.error("DB stock insufficient for seckill order, rolling back: orderSn={}, skuId={}", orderSn, skuId);
+                throw new IllegalStateException("DB stock insufficient for seckill order: " + orderSn);
             }
 
             // 4. 更新活动剩余库存
@@ -130,6 +135,22 @@ public class SeckillOrderConsumer {
             }
 
             log.info("Seckill order created: orderSn={}, userId={}, activityId={}", orderSn, userId, activityId);
+
+            // 4.6. 发送延时关单消息：30 分钟未支付 → 死信 → OrderTimeoutConsumer 取消并回补库存
+            //      发送失败不阻塞下单（与普通下单一致），仅意味着该单不会自动关单
+            try {
+                rabbitTemplate.convertAndSend(
+                        RabbitMQConfig.ORDER_DELAY_EXCHANGE,
+                        RabbitMQConfig.ORDER_DELAY_ROUTING_KEY,
+                        orderSn,
+                        msg -> {
+                            msg.getMessageProperties().setExpiration(String.valueOf(30 * 60 * 1000));
+                            return msg;
+                        }
+                );
+            } catch (Exception e) {
+                log.warn("Failed to send seckill order delay message: orderSn={}, error={}", orderSn, e.getMessage());
+            }
 
             // 4.5. 写入已完成标记，阻止用户重复秒杀同一活动
             //     标记在 Lua 原子检查中与锁/库存一起校验，完全消除锁释放后的时间窗口

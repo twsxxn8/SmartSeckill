@@ -56,4 +56,27 @@ public interface ProductStockMapper extends BaseMapper<ProductStock> {
     /** 查询可用库存：总库存 - 已锁定库存 */
     @Select("SELECT stock - lock_stock FROM product_stock WHERE sku_id = #{skuId} AND stock_type = 0 AND deleted = 0")
     Integer getAvailableStock(@Param("skuId") Long skuId);
+
+    /**
+     * 秒杀下单扣减真实库存（只减 stock，不动 lock_stock）。
+     * <p>
+     * 秒杀链路与普通链路不同：Redis Lua 已完成预扣，这里只做最终落库扣减，
+     * 不存在"先锁定后扣减"的 lock 阶段。若误用 {@link #deductStock} 会把
+     * lock_stock 扣成负数，导致普通通道可用库存（stock - lock_stock）虚增超卖。
+     * </p>
+     *
+     * @return 影响行数，0 表示库存不足（调用方必须回滚事务）
+     */
+    @Update("UPDATE product_stock SET stock = stock - #{quantity}, " +
+            "version = version + 1, update_time = GETDATE() " +
+            "WHERE sku_id = #{skuId} AND stock_type = 0 AND stock >= #{quantity} AND deleted = 0")
+    int deductSeckillStock(@Param("skuId") Long skuId, @Param("quantity") Integer quantity);
+
+    /**
+     * 秒杀订单取消/超时关单时回补真实库存（只加 stock，不动 lock_stock）。
+     */
+    @Update("UPDATE product_stock SET stock = stock + #{quantity}, " +
+            "version = version + 1, update_time = GETDATE() " +
+            "WHERE sku_id = #{skuId} AND stock_type = 0 AND deleted = 0")
+    int restoreSeckillStock(@Param("skuId") Long skuId, @Param("quantity") Integer quantity);
 }

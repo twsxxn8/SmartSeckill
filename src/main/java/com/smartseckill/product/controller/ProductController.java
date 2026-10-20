@@ -2,6 +2,7 @@ package com.smartseckill.product.controller;
 
 import com.smartseckill.common.page.PageResponse;
 import com.smartseckill.common.result.Result;
+import com.smartseckill.product.dto.ProductDetailDTO;
 import com.smartseckill.product.entity.*;
 import com.smartseckill.product.service.ProductService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -55,6 +56,12 @@ public class ProductController {
     @GetMapping("/{spuId}/skus")
     public Result<List<ProductSku>> getSkuList(@PathVariable Long spuId) {
         return Result.success(productService.getSkuListBySpuId(spuId));
+    }
+
+    @Operation(summary = "商品详情（完整信息含品牌/分类名称及SKU规格）")
+    @GetMapping("/detail/{spuId}/full")
+    public Result<ProductDetailDTO> getProductDetailFull(@PathVariable Long spuId) {
+        return Result.success(productService.getProductDetailFull(spuId));
     }
 
     @Operation(summary = "获取库存")

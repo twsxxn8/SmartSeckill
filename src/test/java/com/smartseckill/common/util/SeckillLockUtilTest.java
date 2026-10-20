@@ -3,6 +3,7 @@ package com.smartseckill.common.util;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -17,6 +18,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 @SpringBootTest
 @DisplayName("SeckillLockUtil Redis+Lua 原子锁测试")
+@Tag("integration")  // 需要本地 Redis localhost:6379，默认 mvn test 排除；运行：mvn test -DexcludedGroups= -Dgroups=integration
 class SeckillLockUtilTest {
 
     @Autowired

@@ -2,6 +2,7 @@ package com.smartseckill.user.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.smartseckill.common.util.JwtUtil;
+import com.smartseckill.common.util.RedisUtil;
 import com.smartseckill.product.controller.ProductController;
 import com.smartseckill.product.entity.ProductBrand;
 import com.smartseckill.product.entity.ProductCategory;
@@ -35,6 +36,10 @@ class SecurityConfigPublicPathTest {
 
     @MockBean
     private ProductService productService;
+
+    /** JWT 过滤器依赖（Token 黑名单校验），@WebMvcTest 切片不会扫描该 @Component，需显式 Mock */
+    @MockBean
+    private RedisUtil redisUtil;
 
     @Test
     void productCategories_shouldBePublic() throws Exception {
