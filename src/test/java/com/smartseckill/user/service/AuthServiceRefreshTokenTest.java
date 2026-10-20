@@ -53,6 +53,7 @@ class AuthServiceRefreshTokenTest {
         SysUser user = activeUser(1L);
         when(sysUserMapper.selectById(1L)).thenReturn(user);
         when(sysRoleMapper.selectRolesByUserId(1L)).thenReturn(List.of(userRole(), adminRole()));
+        when(jwtUtil.getExpiration()).thenReturn(7200000L);
         when(jwtUtil.generateToken(1L, "admin", "ROLE_ADMIN")).thenReturn("new-access");
         when(jwtUtil.generateRefreshToken(1L, "admin")).thenReturn("new-refresh");
 
@@ -69,6 +70,7 @@ class AuthServiceRefreshTokenTest {
         SysUser user = activeUser(2L);
         when(sysUserMapper.selectById(2L)).thenReturn(user);
         when(sysRoleMapper.selectRolesByUserId(2L)).thenReturn(List.of(userRole()));
+        when(jwtUtil.getExpiration()).thenReturn(7200000L);
         when(jwtUtil.generateToken(2L, "alice", "ROLE_USER")).thenReturn("new-access");
         when(jwtUtil.generateRefreshToken(2L, "alice")).thenReturn("new-refresh");
 
@@ -96,7 +98,6 @@ class AuthServiceRefreshTokenTest {
         when(jwtUtil.validateToken("refresh-token")).thenReturn(true);
         when(jwtUtil.getUserIdFromToken("refresh-token")).thenReturn(userId);
         when(jwtUtil.getUsernameFromToken("refresh-token")).thenReturn(username);
-        when(jwtUtil.getExpiration()).thenReturn(7200000L);
     }
 
     private SysUser activeUser(Long userId) {

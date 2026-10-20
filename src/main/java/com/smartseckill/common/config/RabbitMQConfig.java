@@ -2,6 +2,7 @@ package com.smartseckill.common.config;
 
 import org.springframework.amqp.core.*;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
+import org.springframework.amqp.rabbit.core.RabbitAdmin;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 import org.springframework.amqp.support.converter.Jackson2JsonMessageConverter;
 import org.springframework.context.annotation.Bean;
@@ -170,5 +171,15 @@ public class RabbitMQConfig {
         RabbitTemplate template = new RabbitTemplate(connectionFactory);
         template.setMessageConverter(converter);
         return template;
+    }
+
+    /**
+     * RabbitAdmin：负责队列/交换机的自动声明，并提供队列深度查询能力
+     * （{@code StockReconciliationJob} 库存恢复与 {@code CacheWarmUpRunner} 启动预热依赖）。
+     * MQ 不可用时声明动作随连接重试，不影响上下文启动。
+     */
+    @Bean
+    public RabbitAdmin rabbitAdmin(ConnectionFactory connectionFactory) {
+        return new RabbitAdmin(connectionFactory);
     }
 }

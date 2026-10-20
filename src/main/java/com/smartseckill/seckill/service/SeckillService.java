@@ -1,6 +1,7 @@
 package com.smartseckill.seckill.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.smartseckill.common.cache.BloomFilterService;
 import com.smartseckill.common.config.RabbitMQConfig;
 import com.smartseckill.common.exception.BusinessException;
 import com.smartseckill.common.result.ResultCode;
@@ -83,6 +84,7 @@ public class SeckillService {
     private final HttpServletRequest httpServletRequest;
     private final OrderInfoMapper orderInfoMapper;
     private final SysUserMapper sysUserMapper;
+    private final BloomFilterService bloomFilterService;
 
     /**
      * 活动预热：将秒杀活动信息和库存数量加载到 Redis。
@@ -118,6 +120,9 @@ public class SeckillService {
         int limitPerUser = activity.getLimitPerUser() != null ? activity.getLimitPerUser() : 1;
 
         // 将库存写入 Redis（用于 Lua 原子扣减）
+        // 注意：库存 Key 不设 TTL —— 活动期间必须始终存在，
+        // TTL 到期会导致 Lua 脚本返回 -3（库存 Key 不存在）= 抢光，后果严重。
+        // 活动结束后由 StockReconciliationJob.cleanupEndedActivities() 清理。
         stringRedisTemplate.opsForValue().set(stockKey, String.valueOf(stock));
 
         // 将活动 SKU/价格信息写入 Redis Hash（消费者创建订单时使用）
@@ -131,6 +136,8 @@ public class SeckillService {
                 activity.getStartTime() != null ? activity.getStartTime().toString() : "");
         stringRedisTemplate.opsForHash().put(activityKey, "endTime",
                 activity.getEndTime() != null ? activity.getEndTime().toString() : "");
+        // Hash Key 设 24h TTL（活动结束后自动清理，checkActivity 可在 TTL 到期后回退 DB）
+        stringRedisTemplate.expire(activityKey, 24, java.util.concurrent.TimeUnit.HOURS);
 
         log.info("Seckill pre-warmed: activityId={}, stock={}, skuId={}",
                 activityId, stock, activity.getSkuId());
@@ -410,6 +417,8 @@ public class SeckillService {
         // 初始状态固定为 0（未开始），前端即使传了其他值也强制覆盖
         activity.setStatus(0);
         activityMapper.insert(activity);
+        // 新活动 ID 加入布隆过滤器
+        bloomFilterService.addActivity(activity.getId());
     }
 
     @Transactional
@@ -417,6 +426,12 @@ public class SeckillService {
         SeckillActivity existing = activityMapper.selectById(id);
         if (existing == null) throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
         // 只更新非 null 的字段，保留原有字段值
+        Integer oldTotalStock = existing.getTotalStock();
+        boolean stockChanged = activity.getTotalStock() != null
+                && !activity.getTotalStock().equals(existing.getTotalStock());
+        boolean statusChanged = activity.getStatus() != null
+                && !activity.getStatus().equals(existing.getStatus());
+
         if (activity.getActivityName() != null) existing.setActivityName(activity.getActivityName());
         if (activity.getSkuId() != null) existing.setSkuId(activity.getSkuId());
         if (activity.getSpuId() != null) existing.setSpuId(activity.getSpuId());
@@ -430,27 +445,54 @@ public class SeckillService {
         if (activity.getStatus() != null) existing.setStatus(activity.getStatus());
         activityMapper.updateById(existing);
 
-        // 同步更新 Redis 缓存中的状态和时间字段，否则 checkActivity() Redis 路径读到旧数据
         String activityKey = RedisUtil.SECKILL_ACTIVITY_PREFIX + id;
+        String stockKey = RedisUtil.SECKILL_STOCK_PREFIX + id;
+
+        // 状态变为已结束/已取消 → 清理 Redis 中的所有活动缓存
+        if (statusChanged && (existing.getStatus() == 2 || existing.getStatus() == 3)) {
+            stringRedisTemplate.delete(activityKey);
+            stringRedisTemplate.delete(stockKey);
+            stringRedisTemplate.delete(RedisUtil.SECKILL_ONLINE_PREFIX + id);
+            // 清理秒杀锁和完成标记（pattern 删除）
+            var lockKeys = stringRedisTemplate.keys(SeckillLockUtil.SECKILL_LOCK_PREFIX + id + ":*");
+            if (lockKeys != null && !lockKeys.isEmpty()) stringRedisTemplate.delete(lockKeys);
+            var completedKeys = stringRedisTemplate.keys(SeckillLockUtil.SECKILL_COMPLETED_PREFIX + id + ":*");
+            if (completedKeys != null && !completedKeys.isEmpty()) stringRedisTemplate.delete(completedKeys);
+            log.info("Seckill activity {} cache cleaned: status changed to {}", id, existing.getStatus());
+            return;
+        }
+
+        // 库存变动 → 按 delta 原子调整 Redis 库存（仅已预热时）
+        // 不能用 SET 覆盖新总库存：会抹掉已产生的订单扣减和 MQ 在途扣减 → 超卖
+        if (stockChanged && (existing.getStatus() == 0 || existing.getStatus() == 1)) {
+            if (Boolean.TRUE.equals(stringRedisTemplate.hasKey(stockKey))) {
+                long delta = (long) existing.getTotalStock() - oldTotalStock;
+                stringRedisTemplate.opsForValue().increment(stockKey, delta);
+                log.info("Seckill activity {} stock adjusted in Redis: totalStock {} → {} (delta={})",
+                        id, oldTotalStock, existing.getTotalStock(), delta);
+            } else {
+                log.info("Seckill activity {} stock changed in DB only (not pre-warmed in Redis): {} → {}",
+                        id, oldTotalStock, existing.getTotalStock());
+            }
+        }
+
+        // 同步更新 Redis Hash 中的活动信息（已预热时才更新，未预热则跳过）
         String cachedSkuId = (String) stringRedisTemplate.opsForHash().get(activityKey, "skuId");
         if (cachedSkuId != null) {
-            if (activity.getStatus() != null) {
+            if (activity.getStatus() != null)
                 stringRedisTemplate.opsForHash().put(activityKey, "status", String.valueOf(existing.getStatus()));
-            }
-            if (activity.getStartTime() != null) {
+            if (activity.getStartTime() != null)
                 stringRedisTemplate.opsForHash().put(activityKey, "startTime",
                         existing.getStartTime() != null ? existing.getStartTime().toString() : "");
-            }
-            if (activity.getEndTime() != null) {
+            if (activity.getEndTime() != null)
                 stringRedisTemplate.opsForHash().put(activityKey, "endTime",
                         existing.getEndTime() != null ? existing.getEndTime().toString() : "");
-            }
-            if (activity.getSkuId() != null) {
+            if (activity.getSkuId() != null)
                 stringRedisTemplate.opsForHash().put(activityKey, "skuId", String.valueOf(existing.getSkuId()));
-            }
-            if (activity.getSeckillPrice() != null) {
+            if (activity.getSeckillPrice() != null)
                 stringRedisTemplate.opsForHash().put(activityKey, "seckillPrice", existing.getSeckillPrice().toString());
-            }
+            if (activity.getLimitPerUser() != null)
+                stringRedisTemplate.opsForHash().put(activityKey, "limitPerUser", String.valueOf(existing.getLimitPerUser()));
         }
     }
 
@@ -459,6 +501,12 @@ public class SeckillService {
         SeckillActivity activity = activityMapper.selectById(id);
         if (activity == null) throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
         activityMapper.deleteById(id);
+
+        // 清理该活动在 Redis 中的所有缓存
+        stringRedisTemplate.delete(RedisUtil.SECKILL_ACTIVITY_PREFIX + id);
+        stringRedisTemplate.delete(RedisUtil.SECKILL_STOCK_PREFIX + id);
+        stringRedisTemplate.delete(RedisUtil.SECKILL_ONLINE_PREFIX + id);
+        stringRedisTemplate.delete(RedisUtil.SECKILL_WINNER_PREFIX + id);
     }
 
     /** 获取全部秒杀活动（管理员），包含已结束/已取消 */
@@ -475,6 +523,10 @@ public class SeckillService {
      * 返回活动实体（优先从 Redis 组装轻量信息）。
      */
     private SeckillActivity checkActivity(Long activityId) {
+        // 0. 布隆预判：绝对不存在 → 快速拒绝
+        if (!bloomFilterService.mightContainActivity(activityId)) {
+            throw new BusinessException(ResultCode.NOT_FOUND, "秒杀活动不存在");
+        }
         String activityKey = RedisUtil.SECKILL_ACTIVITY_PREFIX + activityId;
         String skuIdStr = (String) stringRedisTemplate.opsForHash().get(activityKey, "skuId");
 
@@ -623,9 +675,36 @@ public class SeckillService {
             seckillOrder.setStatus(0);
             seckillOrderMapper.insert(seckillOrder);
 
-            stockMapper.deductStock(skuId, message.getQuantity());
+            // 秒杀专用扣减：只减 stock 不动 lock_stock；失败抛异常回滚（与 MQ 消费者一致）
+            int deductResult = stockMapper.deductSeckillStock(skuId, message.getQuantity());
+            if (deductResult == 0) {
+                log.error("DB stock insufficient for direct seckill order, rolling back: orderSn={}, skuId={}", orderSn, skuId);
+                throw new IllegalStateException("DB stock insufficient for seckill order: " + orderSn);
+            }
+
+            // 与 MQ 消费者路径保持一致：同步更新活动剩余库存
+            SeckillActivity activity = activityMapper.selectById(activityId);
+            if (activity != null) {
+                activity.setAvailableStock(activity.getAvailableStock() - message.getQuantity());
+                activityMapper.updateById(activity);
+            }
 
             log.info("Direct seckill order created: orderSn={}", orderSn);
+
+            // 延时关单消息（MQ 不可用场景下发送会失败，仅记录日志，与普通下单一致）
+            try {
+                rabbitTemplate.convertAndSend(
+                        RabbitMQConfig.ORDER_DELAY_EXCHANGE,
+                        RabbitMQConfig.ORDER_DELAY_ROUTING_KEY,
+                        orderSn,
+                        msg -> {
+                            msg.getMessageProperties().setExpiration(String.valueOf(30 * 60 * 1000));
+                            return msg;
+                        }
+                );
+            } catch (Exception e) {
+                log.warn("Failed to send direct seckill order delay message: orderSn={}, error={}", orderSn, e.getMessage());
+            }
 
             // 写入已完成标记，防止用户重复秒杀同一活动
             seckillLockUtil.markCompleted(activityId, userId);

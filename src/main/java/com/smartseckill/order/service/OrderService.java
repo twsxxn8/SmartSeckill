@@ -63,6 +63,7 @@ public class OrderService {
     private final UserCouponMapper userCouponMapper;
     private final RabbitTemplate rabbitTemplate;
     private final StringRedisTemplate stringRedisTemplate;
+    private final com.smartseckill.seckill.service.SeckillStockRestoreService seckillStockRestoreService;
 
     /**
      * 创建普通订单。
@@ -218,6 +219,12 @@ public class OrderService {
         order.setCancelTime(LocalDateTime.now());
         order.setCancelReason(reason);
         orderInfoMapper.updateById(order);
+
+        // 秒杀订单（orderType=1）无 OrderItem，上面的 unlockStock 对其无效，
+        // 需走秒杀专用回补：Redis 库存 + 已完成标记 + DB stock + 活动剩余库存
+        if (order.getOrderType() != null && order.getOrderType() == 1) {
+            seckillStockRestoreService.restoreOnCancel(orderSn);
+        }
 
         saveStatusLog(order.getId(), orderSn, 0, 4, "user", reason);
     }
