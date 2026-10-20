@@ -36,6 +36,8 @@ public enum ResultCode {
     ORDER_NOT_FOUND(1201, "订单不存在"),
     ORDER_STATUS_ERROR(1202, "订单状态异常"),
     ORDER_ALREADY_PAID(1203, "订单已支付"),
+    ORDER_TOKEN_INVALID(1204, "下单令牌无效或已过期，请刷新页面重试"),
+    ORDER_SUBMITTING(1205, "订单处理中，请稍后到订单列表查看"),
 
     // 秒杀相关 1301-1399
     SECKILL_NOT_STARTED(1301, "秒杀活动未开始"),

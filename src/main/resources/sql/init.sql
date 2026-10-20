@@ -186,6 +186,7 @@ CREATE TABLE order_info (
     cancel_time DATETIME2,
     cancel_reason NVARCHAR(255),
     remark NVARCHAR(500),
+    submit_token NVARCHAR(64) NULL,          -- 一次性下单令牌（幂等防重复提交，秒杀订单为 NULL）
     deleted TINYINT DEFAULT 0,
     create_time DATETIME2 DEFAULT GETDATE(),
     update_time DATETIME2 DEFAULT GETDATE()
@@ -389,6 +390,7 @@ CREATE INDEX idx_product_sku_spu_id ON product_sku(spu_id);
 CREATE INDEX idx_product_stock_sku_id ON product_stock(sku_id);
 CREATE INDEX idx_order_info_user_id ON order_info(user_id);
 CREATE INDEX idx_order_info_order_sn ON order_info(order_sn);
+CREATE UNIQUE INDEX ux_order_info_submit_token ON order_info(submit_token) WHERE submit_token IS NOT NULL;
 CREATE INDEX idx_order_item_order_id ON order_item(order_id);
 CREATE INDEX idx_seckill_activity_sku_id ON seckill_activity(sku_id);
 CREATE INDEX idx_seckill_order_activity_id ON seckill_order(activity_id);

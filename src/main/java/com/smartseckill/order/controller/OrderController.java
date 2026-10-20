@@ -32,7 +32,14 @@ public class OrderController {
 
     private final OrderService orderService;
 
-    /** 创建订单：锁定库存 + 发送 30 分钟超时取消消息 */
+    /** 签发一次性下单令牌：进入确认订单页时获取，提交订单时携带，防重复提交 */
+    @Operation(summary = "获取下单令牌")
+    @PostMapping("/token")
+    public Result<String> generateSubmitToken(@AuthenticationPrincipal LoginUser loginUser) {
+        return Result.success(orderService.generateSubmitToken(loginUser.getUserId()));
+    }
+
+    /** 创建订单：幂等（令牌 + Redis SETNX + DB 唯一索引），重复提交返回首单 */
     @Operation(summary = "创建订单")
     @PostMapping
     public Result<OrderInfo> createOrder(@AuthenticationPrincipal LoginUser loginUser,

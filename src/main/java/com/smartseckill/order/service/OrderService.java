@@ -25,15 +25,19 @@ import com.smartseckill.user.mapper.UserAddressMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -63,14 +67,127 @@ public class OrderService {
     private final UserCouponMapper userCouponMapper;
     private final RabbitTemplate rabbitTemplate;
     private final StringRedisTemplate stringRedisTemplate;
+    private final PlatformTransactionManager transactionManager;
     private final com.smartseckill.seckill.service.SeckillStockRestoreService seckillStockRestoreService;
 
+    /** 下单令牌 Key 前缀：order:submit:token:{userId}:{token}，签发时写入 */
+    private static final String ORDER_TOKEN_KEY = "order:submit:token:";
+    /** 提交结果 Key 前缀：order:submit:result:{userId}:{token}，SETNX 抢占 + 缓存首单结果 */
+    private static final String ORDER_SUBMIT_KEY = "order:submit:result:";
+    /** 提交结果占位值：首请求仍在创建中 */
+    private static final String SUBMIT_PROCESSING = "PROCESSING";
+    /** 下单令牌有效期（分钟） */
+    private static final long TOKEN_TTL_MINUTES = 10;
+    /** 提交结果缓存时长（小时），覆盖用户重试/页面刷新窗口 */
+    private static final long SUBMIT_RESULT_TTL_HOURS = 24;
+
     /**
-     * 创建普通订单。
-     * <p>步骤：校验地址 → 生成订单号 → 遍历 SKU 锁定库存 → 写订单 → 发延迟消息</p>
+     * 创建普通订单（幂等入口）。
+     * <p>
+     * 防重复提交三道防线：
+     * <ol>
+     *   <li>一次性令牌：下单前必须先调 {@code POST /order/token} 签发，提交时携带</li>
+     *   <li>Redis SETNX 抢占：同一令牌只有第一个请求进入创建流程；重复请求短轮询后
+     *       返回首次创建的订单（响应丢失重试场景用户无感，不会产生新订单）</li>
+     *   <li>DB 唯一索引兜底：order_info.submit_token 过滤唯一索引，Redis 失效时
+     *       并发第二笔 insert 冲突，转为返回已存在的订单</li>
+     * </ol>
+     * 事务用 {@link TransactionTemplate} 编程式控制（同类自调用不走 Spring 代理），
+     * 保证「先提交事务、后写结果缓存」与「先回滚、后释放锁」的顺序。
+     * </p>
      */
-    @Transactional
     public OrderInfo createOrder(Long userId, CreateOrderRequest request) {
+        String token = request.getSubmitToken();
+        String tokenKey = ORDER_TOKEN_KEY + userId + ":" + token;
+        String submitKey = ORDER_SUBMIT_KEY + userId + ":" + token;
+
+        // 1. 先查结果缓存：该令牌已成功创建过订单 → 直接返回首单
+        //    （必须在令牌校验之前：成功后令牌已销毁，否则会误判 1204）
+        String cached = stringRedisTemplate.opsForValue().get(submitKey);
+        if (cached != null && !SUBMIT_PROCESSING.equals(cached)) {
+            return getOrderBySn(cached);
+        }
+
+        // 2. 校验令牌已签发且未过期
+        if (!Boolean.TRUE.equals(stringRedisTemplate.hasKey(tokenKey))) {
+            throw new BusinessException(ResultCode.ORDER_TOKEN_INVALID);
+        }
+
+        // 3. SETNX 抢占：仅第一个请求继续创建，重复请求复用首单结果
+        Boolean first = stringRedisTemplate.opsForValue()
+                .setIfAbsent(submitKey, SUBMIT_PROCESSING, SUBMIT_RESULT_TTL_HOURS, TimeUnit.HOURS);
+        if (Boolean.FALSE.equals(first)) {
+            return waitForCreatedOrder(submitKey);
+        }
+
+        try {
+            OrderInfo order = new TransactionTemplate(transactionManager)
+                    .execute(status -> doCreateOrder(userId, request));
+            // 3. 创建成功：写入结果供重复请求复用，并消费一次性令牌
+            stringRedisTemplate.opsForValue().set(
+                    submitKey, order.getOrderSn(), SUBMIT_RESULT_TTL_HOURS, TimeUnit.HOURS);
+            stringRedisTemplate.delete(tokenKey);
+            return order;
+        } catch (DuplicateKeyException e) {
+            // 唯一索引兜底命中：并发穿透 Redis 时被 DB 拦截，返回已创建的订单
+            OrderInfo existing = getOrderBySubmitToken(userId, token);
+            if (existing != null) {
+                stringRedisTemplate.opsForValue().set(
+                        submitKey, existing.getOrderSn(), SUBMIT_RESULT_TTL_HOURS, TimeUnit.HOURS);
+                stringRedisTemplate.delete(tokenKey);
+                return existing;
+            }
+            // 首单尚未提交（极小窗口）：释放锁让客户端重试
+            stringRedisTemplate.delete(submitKey);
+            throw e;
+        } catch (Exception e) {
+            // 创建失败（库存不足等）：释放提交锁，允许用户修正后重试
+            stringRedisTemplate.delete(submitKey);
+            throw e;
+        }
+    }
+
+    /**
+     * 重复提交处理：首请求仍在创建中，短轮询等待其写入结果（最长约 3s）后返回同一笔订单；
+     * 超时则提示用户到订单列表确认，而不是报错丢单。
+     */
+    private OrderInfo waitForCreatedOrder(String submitKey) {
+        for (int i = 0; i < 15; i++) {
+            String orderSn = stringRedisTemplate.opsForValue().get(submitKey);
+            if (orderSn != null && !SUBMIT_PROCESSING.equals(orderSn)) {
+                return getOrderBySn(orderSn);
+            }
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+        throw new BusinessException(ResultCode.ORDER_SUBMITTING);
+    }
+
+    /** 签发一次性下单令牌（进入确认订单页时调用），10 分钟有效，下单成功后销毁 */
+    public String generateSubmitToken(Long userId) {
+        String token = UUID.randomUUID().toString().replace("-", "");
+        stringRedisTemplate.opsForValue().set(
+                ORDER_TOKEN_KEY + userId + ":" + token, "1", TOKEN_TTL_MINUTES, TimeUnit.MINUTES);
+        return token;
+    }
+
+    /** 按提交令牌查询订单（submit_token 唯一索引保证最多一条） */
+    private OrderInfo getOrderBySubmitToken(Long userId, String submitToken) {
+        return orderInfoMapper.selectOne(new LambdaQueryWrapper<OrderInfo>()
+                .eq(OrderInfo::getSubmitToken, submitToken)
+                .eq(OrderInfo::getUserId, userId));
+    }
+
+    /**
+     * 实际创建订单。
+     * <p>步骤：校验地址 → 生成订单号 → 遍历 SKU 锁定库存 → 写订单 → 发延迟消息</p>
+     * <p>由 {@link #createOrder} 通过 {@link TransactionTemplate} 包裹在事务内调用。</p>
+     */
+    private OrderInfo doCreateOrder(Long userId, CreateOrderRequest request) {
         // 1. 获取收货地址并校验归属（userId.equals 避免 getUserId() 为 null 时 NPE）
         UserAddress address = addressMapper.selectById(request.getAddressId());
         if (address == null || address.getDeleted() == 1 || !userId.equals(address.getUserId())) {
@@ -132,6 +249,7 @@ public class OrderService {
         order.setCouponAmount(couponAmount);
         order.setStatus(0); // 待支付
         order.setOrderType(0); // 普通订单
+        order.setSubmitToken(request.getSubmitToken()); // 幂等令牌落库，唯一索引兜底防重
         order.setReceiverName(address.getReceiverName());
         order.setReceiverPhone(address.getReceiverPhone());
         order.setReceiverAddress(String.format("%s %s %s %s",

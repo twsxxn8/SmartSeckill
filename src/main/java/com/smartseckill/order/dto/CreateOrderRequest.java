@@ -1,6 +1,7 @@
 package com.smartseckill.order.dto;
 
 import io.swagger.v3.oas.annotations.media.Schema;
+import javax.validation.constraints.NotBlank;
 import javax.validation.constraints.NotEmpty;
 import javax.validation.constraints.NotNull;
 import lombok.Data;
@@ -18,6 +19,10 @@ public class CreateOrderRequest {
     @NotNull(message = "地址ID不能为空")
     @Schema(description = "收货地址ID")
     private Long addressId;
+
+    @NotBlank(message = "下单令牌不能为空")
+    @Schema(description = "一次性下单令牌（POST /order/token 签发，防重复提交）")
+    private String submitToken;
 
     @NotEmpty(message = "订单项不能为空")
     @Schema(description = "订单项列表")
